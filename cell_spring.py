@@ -1,17 +1,34 @@
 import taichi as ti
-ti.init(arch=ti.vulkan)
+ti.init(arch=ti.gpu)
 
-
+particle_struct = {
+    "pos": ti.math.vec2,
+    "vel": ti.math.vec2,
+    "acc": ti.math.vec2,
+    "mass": float,
+    "cell_id": int,
+    "is_nucleus": int,
+    "is_attached": int,
+}
 
 @ti.data_oriented
 class Simulation():
     def __init__(self, H=1024, W=1024, dt=1e-4, headless=False):
         self.H = H
         self.W = W
-        self.window = ti.ui.Window(name="MycroVerse", res=(H, W), show_window=not headless)
-        self.canvas = self.window.get_canvas()
+        # Using old GUI to support Vulkan 1.4 on some machines
+        # self.window = ti.ui.Window(name="MycroVerse", res=(H, W), show_window=not headless)
+        # self.canvas = self.window.get_canvas()
+        self.gui = ti.GUI(name="MycroVerse", res=max(H, W))
         self.time = ti.field(dtype=float, shape=())
         self.dt = dt
+
+        # Create Nodes sparse structure
+        self.S_particles = ti.root.dynamic(ti.i, 10000, chunk_size=32)
+        self.particles = ti.Struct.field(particle_struct)
+        self.S_particles.place(self.particles)
+
+
         self.max_particles = ti.field(dtype=int, shape=(1,))
         self.max_particles[0] = 10000
         # Positions of each particle
@@ -23,8 +40,12 @@ class Simulation():
         # UI Vars
         self.selected_cell = -1
     
-    def update(self):
+    @ti.kernel
+    def update_particles(self):
         pass
+
+    def update(self):
+        self.update_particles()
 
     @ti.kernel
     def reset(self):
@@ -33,46 +54,43 @@ class Simulation():
 
 
     def draw(self):
-        self.canvas.set_background_color((1, 1, 1))
         # Draw particles
-        self.canvas.circles(self.pos, radius=.01, color=(0, 0, 0))
-        self.window.show()
+        to_draw = self.particles.pos.to_numpy()
+        self.gui.circles(to_draw, radius=1, color=0xFF0000)
+        self.gui.show()
     
     @ti.kernel
     def add_particle(self, x: float, y: float, cell_id: int):
-        # TODO: DOES NOT WORK
-        n = self.max_particles[0]
-        drawn = False
-        for i in range(n):
-            if self.part_to_obj[i] == -1 and not drawn:
-                drawn = True
-                self.part_to_obj[i] = cell_id
-                self.pos[i] = [x, y]
-                print(f"Adding particle at {x}, {y} with cell id {cell_id}")
+
+        print("Adding Particle")
+        first_free_idx = self.particles.length()
+        self.particles[first_free_idx].is_nucleus = 1
+        self.particles[first_free_idx].pos[0] = x
+        self.particles[first_free_idx].pos[1] = y
+        print(self.particles[first_free_idx].pos)
+        print(self.particles.length())
 
     def parse_input(self):
-        events = self.window.get_events()
+        events = self.gui.get_events()
         for e in events:
             if e.key == ti.ui.ESCAPE:
-                self.window.destroy()
+                self.gui.destroy()
             if e.key == 'r':
                 self.reset()
             # If number key is pressed, change selected cell
-            if self.window.is_pressed(ti.ui.UP):
+            if self.gui.is_pressed(ti.ui.UP):
                 self.selected_cell = max(0, self.selected_cell + 1)
                 print(f"Selected cell: {self.selected_cell}")
-            if self.window.is_pressed(ti.ui.DOWN):
+            if self.gui.is_pressed(ti.ui.DOWN):
                 self.selected_cell = max(0, self.selected_cell - 1)
                 print(f"Selected cell: {self.selected_cell}")
-            if self.window.is_pressed("a"):
-                print("Adding particle")
-                x, y = self.window.get_cursor_pos()
-                
+            if self.gui.is_pressed("a"):
+                x, y = self.gui.get_cursor_pos()                
                 self.add_particle(x, y, self.selected_cell)
             
     def run(self):
         self.reset()
-        while self.window.running:
+        while self.gui.running:
             self.parse_input()
             self.update()
             self.draw()
